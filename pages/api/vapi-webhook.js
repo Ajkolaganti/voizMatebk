@@ -3,6 +3,13 @@ import nodemailer from 'nodemailer';
 import { promises as fs } from 'fs';
 import path from 'path';
 
+// Add CORS headers
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 // Initialize Gmail API
 const oauth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
@@ -359,6 +366,16 @@ async function sendEmail(call) {
 }
 
 export default async function handler(req, res) {
+  // Handle OPTIONS request for CORS preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(200).json({}, { headers: corsHeaders });
+  }
+
+  // Add CORS headers to all responses
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
   // Handle GET requests with a helpful message
   if (req.method === 'GET') {
     log('info', 'Received GET request', { 
