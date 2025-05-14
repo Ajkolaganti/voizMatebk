@@ -15,18 +15,6 @@ oauth2Client.setCredentials({
 
 const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-// Create email transporter
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    type: 'OAuth2',
-    user: process.env.GMAIL_EMAIL,
-    clientId: process.env.GMAIL_CLIENT_ID,
-    clientSecret: process.env.GMAIL_CLIENT_SECRET,
-    refreshToken: process.env.GMAIL_REFRESH_TOKEN,
-  },
-});
-
 // Helper function to log with timestamp
 const log = (level, message, data = {}) => {
   const timestamp = new Date().toISOString();
@@ -55,6 +43,52 @@ const formatCost = (cost) => {
 // Helper function to format timestamp
 const formatTimestamp = (timestamp) => {
   return new Date(timestamp).toLocaleString();
+};
+
+// Validate Gmail configuration
+const validateGmailConfig = () => {
+  const requiredEnvVars = [
+    'GMAIL_CLIENT_ID',
+    'GMAIL_CLIENT_SECRET',
+    'GMAIL_REFRESH_TOKEN',
+    'GMAIL_EMAIL'
+  ];
+
+  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+  
+  if (missingVars.length > 0) {
+    log('error', 'Missing required Gmail environment variables', {
+      missing: missingVars
+    });
+    return false;
+  }
+
+  return true;
+};
+
+// Create email transporter with validation
+const createTransporter = () => {
+  if (!validateGmailConfig()) {
+    throw new Error('Invalid Gmail configuration');
+  }
+
+  log('info', 'Creating Gmail transporter', {
+    email: process.env.GMAIL_EMAIL,
+    has_client_id: !!process.env.GMAIL_CLIENT_ID,
+    has_client_secret: !!process.env.GMAIL_CLIENT_SECRET,
+    has_refresh_token: !!process.env.GMAIL_REFRESH_TOKEN
+  });
+
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      type: 'OAuth2',
+      user: process.env.GMAIL_EMAIL,
+      clientId: process.env.GMAIL_CLIENT_ID,
+      clientSecret: process.env.GMAIL_CLIENT_SECRET,
+      refreshToken: process.env.GMAIL_REFRESH_TOKEN,
+    },
+  });
 };
 
 export default async function handler(req, res) {
@@ -236,6 +270,9 @@ This is an automated message from your Retell Voice Agent.
 
     // Send email
     try {
+      // Create transporter with validation
+      const transporter = createTransporter();
+
       const mailOptions = {
         from: process.env.GMAIL_EMAIL,
         to: defaultContact.email,
@@ -258,6 +295,18 @@ This is an automated message from your Retell Voice Agent.
         has_content: !!mailOptions.text,
         content_length: mailOptions.text.length
       });
+
+      // Verify SMTP connection
+      try {
+        await transporter.verify();
+        log('info', 'SMTP connection verified successfully');
+      } catch (error) {
+        log('error', 'SMTP connection verification failed', {
+          error: error.message,
+          code: error.code
+        });
+        throw error;
+      }
 
       const info = await transporter.sendMail(mailOptions);
       
