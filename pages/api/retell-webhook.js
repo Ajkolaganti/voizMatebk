@@ -175,6 +175,7 @@ function formatEmailContent(call) {
 
 📋 Call Details
 --------------
+From: ${process.env.GMAIL_EMAIL}
 Call ID: ${call_id}
 Type: ${call_type}
 Status: ${call_status}
@@ -316,6 +317,7 @@ function formatEmailContentHtml(call) {
       
       <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
         <h2 style="color: #34495e;">📋 Call Details</h2>
+        <p><strong>From:</strong> ${process.env.GMAIL_EMAIL}</p>
         <p><strong>Call ID:</strong> ${call_id}</p>
         <p><strong>Type:</strong> ${call_type}</p>
         <p><strong>Status:</strong> ${call_status}</p>
