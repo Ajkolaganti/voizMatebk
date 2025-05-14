@@ -45,6 +45,64 @@ const formatTimestamp = (timestamp) => {
   return new Date(timestamp).toLocaleString();
 };
 
+// Track call status changes
+const trackCallStatus = (call) => {
+  const {
+    call_id,
+    call_type,
+    call_status,
+    start_timestamp,
+    end_timestamp,
+    duration_ms,
+    disconnection_reason,
+    call_cost
+  } = call;
+
+  // Log call status change
+  log('info', 'Call status change', {
+    call_id,
+    call_type,
+    call_status,
+    start_time: start_timestamp ? formatTimestamp(start_timestamp) : 'N/A',
+    end_time: end_timestamp ? formatTimestamp(end_timestamp) : 'N/A',
+    duration: duration_ms ? formatDuration(duration_ms) : 'N/A',
+    disconnection_reason: disconnection_reason || 'N/A',
+    cost: call_cost ? formatCost(call_cost.combined_cost) : 'N/A'
+  });
+
+  // Log additional details based on call status
+  switch (call_status) {
+    case 'ongoing':
+      log('info', 'Call started', {
+        call_id,
+        start_time: formatTimestamp(start_timestamp)
+      });
+      break;
+    
+    case 'ended':
+      log('info', 'Call ended', {
+        call_id,
+        duration: formatDuration(duration_ms),
+        reason: disconnection_reason,
+        cost: call_cost ? formatCost(call_cost.combined_cost) : 'N/A'
+      });
+      break;
+    
+    case 'failed':
+      log('error', 'Call failed', {
+        call_id,
+        reason: disconnection_reason
+      });
+      break;
+    
+    default:
+      log('info', 'Unknown call status', {
+        call_id,
+        status: call_status
+      });
+  }
+};
+
 // Validate Gmail configuration
 const validateGmailConfig = () => {
   const requiredEnvVars = [
@@ -163,12 +221,19 @@ export default async function handler(req, res) {
       });
     }
 
-    // Only process call_ended events
-    if (event !== 'call_ended') {
-      log('info', 'Ignoring non-call_ended event', { event });
+    // Track call status changes for all events
+    trackCallStatus(call);
+
+    // Process both call_ended and call_analyzed events for email sending
+    if (event !== 'call_ended' && event !== 'call_analyzed') {
+      log('info', 'Ignoring non-call completion event', { 
+        event,
+        call_status: call.call_status 
+      });
       return res.status(200).json({ 
         message: 'Event received but not processed',
-        event
+        event,
+        call_status: call.call_status
       });
     }
 
@@ -183,10 +248,12 @@ export default async function handler(req, res) {
       start_timestamp,
       end_timestamp,
       disconnection_reason,
-      call_cost
+      call_cost,
+      call_analysis
     } = call;
 
-    log('info', 'Processing call event', { 
+    log('info', 'Processing call completion event', { 
+      event,
       call_id,
       call_type,
       call_status,
@@ -195,7 +262,8 @@ export default async function handler(req, res) {
       has_recording: !!recording_url,
       has_log: !!public_log_url,
       disconnection_reason,
-      call_cost
+      call_cost,
+      has_analysis: !!call_analysis
     });
 
     // Read contacts from JSON file
@@ -243,6 +311,15 @@ Duration: ${formatDuration(duration_ms)}
 Started: ${formatTimestamp(start_timestamp)}
 Ended: ${formatTimestamp(end_timestamp)}
 Disconnection Reason: ${disconnection_reason || 'Not specified'}
+
+${call_analysis ? `
+📊 Call Analysis
+--------------
+Summary: ${call_analysis.call_summary}
+User Sentiment: ${call_analysis.user_sentiment}
+Call Successful: ${call_analysis.call_successful ? 'Yes' : 'No'}
+${call_analysis.in_voicemail ? '📱 Left Voicemail' : ''}
+` : ''}
 
 💰 Cost Breakdown
 ---------------
