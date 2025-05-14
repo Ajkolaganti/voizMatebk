@@ -373,179 +373,24 @@ function formatEmailContentHtml(call) {
 }
 
 export default async function handler(req, res) {
-  // Handle GET requests with a helpful message
-  if (req.method === 'GET') {
-    log('info', 'Received GET request', { 
-      path: req.url,
-      query: req.query,
-      headers: req.headers
-    });
-    
-    return res.status(200).json({
-      status: 'ok',
-      message: 'This is a webhook endpoint for Retell Voice Agent. Please use POST method to send call data.',
-      usage: {
-        method: 'POST',
-        endpoint: '/api/retell-webhook',
-        requiredFields: ['event', 'call'],
-        example: {
-          event: 'call_ended',
-          call: {
-            call_id: 'unique-call-id',
-            call_type: 'web_call',
-            call_status: 'ended',
-            duration_ms: 30000,
-            transcript: 'Call transcript here...'
-          }
-        }
-      }
-    });
+  // Redirect to the new webhook endpoint
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.status(200).end();
   }
 
-  // Only allow POST requests for actual webhook calls
-  if (req.method !== 'POST') {
-    log('error', 'Method not allowed', { 
-      method: req.method,
-      allowedMethods: ['POST', 'GET'],
-      path: req.url
-    });
-    return res.status(405).json({ 
-      error: 'Method not allowed',
-      message: 'Only POST and GET methods are supported',
-      allowedMethods: ['POST', 'GET']
-    });
-  }
+  // Log the redirect
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    message: 'Redirecting to new webhook endpoint',
+    old_path: '/api/retell-webhook',
+    new_path: '/api/vapi-webhook',
+    method: req.method
+  }));
 
-  try {
-    log('info', 'Received webhook request', { 
-      body: req.body,
-      headers: req.headers
-    });
-
-    const { event, call } = req.body;
-    
-    // Validate required fields
-    if (!event || !call) {
-      log('error', 'Missing required fields', {
-        body: req.body
-      });
-      return res.status(400).json({ 
-        error: 'Missing required fields',
-        message: 'The request body must include event and call objects',
-        example: {
-          event: 'call_ended',
-          call: {
-            call_id: 'unique-call-id',
-            call_type: 'web_call',
-            call_status: 'ended',
-            duration_ms: 30000
-          }
-        }
-      });
-    }
-
-    // Track call status changes for all events
-    trackCallStatus(call);
-
-    // Process both call_ended and call_analyzed events for email sending
-    if (event !== 'call_ended' && event !== 'call_analyzed') {
-      log('info', 'Ignoring non-call completion event', { 
-        event,
-        call_status: call.call_status 
-      });
-      return res.status(200).json({ 
-        message: 'Event received but not processed',
-        event,
-        call_status: call.call_status
-      });
-    }
-
-    const {
-      call_id,
-      call_type,
-      call_status,
-      duration_ms,
-      transcript,
-      recording_url,
-      public_log_url,
-      start_timestamp,
-      end_timestamp,
-      disconnection_reason,
-      call_cost,
-      call_analysis,
-      caller_number
-    } = call;
-
-    log('info', 'Processing call completion event', { 
-      event,
-      call_id,
-      call_type,
-      call_status,
-      duration_ms,
-      has_transcript: !!transcript,
-      has_recording: !!recording_url,
-      has_log: !!public_log_url,
-      disconnection_reason,
-      call_cost,
-      has_analysis: !!call_analysis
-    });
-
-    // Send email
-    try {
-      const info = await sendEmail(call);
-      
-      return res.status(200).json({ 
-        message: 'Email sent successfully',
-        contact: {
-          name: call.name,
-          email: call.email
-        },
-        call: {
-          id: call_id,
-          duration: formatDuration(duration_ms),
-          status: call_status,
-          cost: call_cost ? formatCost(call_cost.combined_cost) : null
-        },
-        email: {
-          message_id: info.messageId,
-          accepted: info.accepted,
-          rejected: info.rejected
-        }
-      });
-    } catch (error) {
-      log('error', 'Failed to send email', { 
-        error: error.message,
-        error_code: error.code,
-        error_command: error.command,
-        call_id,
-        stack: error.stack
-      });
-
-      // Log additional error details if available
-      if (error.response) {
-        log('error', 'SMTP error response', {
-          code: error.responseCode,
-          command: error.command,
-          response: error.response
-        });
-      }
-
-      return res.status(500).json({ 
-        error: 'Failed to send email',
-        message: 'Internal server error while sending email',
-        details: error.message,
-        code: error.code
-      });
-    }
-  } catch (error) {
-    log('error', 'Unexpected error in webhook handler', { 
-      error: error.message,
-      stack: error.stack
-    });
-    return res.status(500).json({ 
-      error: 'Internal server error',
-      message: 'An unexpected error occurred while processing the webhook',
-      details: error.message
-    });
-  }
+  // Redirect the request to the new endpoint
+  return res.redirect(307, '/api/vapi-webhook');
 } 
