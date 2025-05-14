@@ -15,6 +15,9 @@ oauth2Client.setCredentials({
 
 const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
+// Add this after the imports
+const DEFAULT_EMAIL = process.env.DEFAULT_EMAIL || 'your-default-email@example.com';
+
 // Helper function to log with timestamp
 const log = (level, message, data = {}) => {
   const timestamp = new Date().toISOString();
@@ -149,6 +152,82 @@ const createTransporter = () => {
   });
 };
 
+// Replace the email sending section with this updated version
+async function sendEmail(call) {
+  try {
+    // Read contacts
+    const contactsPath = path.join(process.cwd(), 'data', 'contacts.json');
+    console.log('Reading contacts from:', contactsPath);
+    
+    let contacts = [];
+    try {
+      const contactsData = await fs.readFile(contactsPath, 'utf8');
+      contacts = JSON.parse(contactsData);
+      console.log('Successfully loaded contacts:', { count: contacts.length });
+    } catch (error) {
+      console.error('Error reading contacts:', error);
+      // Continue with default email if contacts file can't be read
+    }
+
+    // Find contact or use default
+    const callerNumber = call.caller_number;
+    let recipientEmail = DEFAULT_EMAIL;
+    
+    if (callerNumber && contacts.length > 0) {
+      const contact = contacts.find(c => c.number === callerNumber);
+      if (contact && contact.email) {
+        recipientEmail = contact.email;
+        console.log('Found contact email:', { name: contact.name, email: contact.email });
+      } else {
+        console.log('No email found for contact, using default:', { number: callerNumber });
+      }
+    } else {
+      console.log('Using default email recipient:', DEFAULT_EMAIL);
+    }
+
+    // Validate email address
+    if (!recipientEmail || !recipientEmail.includes('@')) {
+      throw new Error('Invalid recipient email address');
+    }
+
+    // Prepare email content
+    const emailContent = formatEmailContent(call);
+    console.log('Prepared email content:', { length: emailContent.length });
+
+    // Create transporter
+    const transporter = createTransporter();
+    if (!transporter) {
+      throw new Error('Failed to create email transporter');
+    }
+
+    // Send email
+    const info = await transporter.sendMail({
+      from: process.env.GMAIL_EMAIL,
+      to: recipientEmail,
+      subject: `Call Summary - ${call.call_id}`,
+      text: emailContent,
+      html: emailContent
+    });
+
+    console.log('Email sent successfully:', {
+      messageId: info.messageId,
+      recipient: recipientEmail,
+      callId: call.call_id
+    });
+
+    return info;
+  } catch (error) {
+    console.error('Failed to send email:', {
+      error: error.message,
+      error_code: error.code,
+      error_command: error.command,
+      call_id: call.call_id,
+      stack: error.stack
+    });
+    throw error;
+  }
+}
+
 export default async function handler(req, res) {
   // Handle GET requests with a helpful message
   if (req.method === 'GET') {
@@ -266,141 +345,15 @@ export default async function handler(req, res) {
       has_analysis: !!call_analysis
     });
 
-    // Read contacts from JSON file
-    const contactsPath = path.join(process.cwd(), 'data', 'contacts.json');
-    let contacts;
-    try {
-      const contactsData = fs.readFileSync(contactsPath, 'utf8');
-      contacts = JSON.parse(contactsData);
-      log('info', 'Successfully loaded contacts', { 
-        contactCount: contacts.length 
-      });
-    } catch (error) {
-      log('error', 'Failed to read contacts file', { 
-        error: error.message,
-        path: contactsPath
-      });
-      return res.status(500).json({ 
-        error: 'Failed to read contacts file',
-        message: 'Internal server error while accessing contacts database'
-      });
-    }
-
-    // For now, we'll send the email to a default contact since we don't have caller number
-    // In a real implementation, you would need to map the call to a contact
-    const defaultContact = contacts[0]; // Using first contact as default
-    if (!defaultContact) {
-      log('error', 'No contacts found in database');
-      return res.status(500).json({ 
-        error: 'No contacts configured',
-        message: 'Please add at least one contact to the database'
-      });
-    }
-
-    // Prepare email content with enhanced formatting
-    const emailContent = `
-📞 Call Summary
-==============
-
-📋 Call Details
---------------
-Call ID: ${call_id}
-Type: ${call_type}
-Status: ${call_status}
-Duration: ${formatDuration(duration_ms)}
-Started: ${formatTimestamp(start_timestamp)}
-Ended: ${formatTimestamp(end_timestamp)}
-Disconnection Reason: ${disconnection_reason || 'Not specified'}
-
-${call_analysis ? `
-📊 Call Analysis
---------------
-Summary: ${call_analysis.call_summary}
-User Sentiment: ${call_analysis.user_sentiment}
-Call Successful: ${call_analysis.call_successful ? 'Yes' : 'No'}
-${call_analysis.in_voicemail ? '📱 Left Voicemail' : ''}
-` : ''}
-
-💰 Cost Breakdown
----------------
-${call_cost ? `
-Total Cost: ${formatCost(call_cost.combined_cost)}
-Duration Cost: ${formatCost(call_cost.total_duration_unit_price)}
-Product Costs:
-${call_cost.product_costs.map(cost => `- ${cost.product}: ${formatCost(cost.cost)}`).join('\n')}
-` : 'No cost information available'}
-
-${transcript ? `
-📝 Transcript
------------
-${transcript}
-` : ''}
-
-🔗 Links
--------
-${recording_url ? `Recording: ${recording_url}` : ''}
-${public_log_url ? `Call Log: ${public_log_url}` : ''}
-
----
-This is an automated message from your Retell Voice Agent.
-`;
-
     // Send email
     try {
-      // Create transporter with validation
-      const transporter = createTransporter();
-
-      const mailOptions = {
-        from: process.env.GMAIL_EMAIL,
-        to: defaultContact.email,
-        subject: `📞 Call Summary - ${call_id}`,
-        text: emailContent,
-      };
-
-      log('info', 'Preparing to send email', { 
-        to: defaultContact.email,
-        subject: mailOptions.subject,
-        call_id,
-        content_length: emailContent.length
-      });
-
-      // Log email configuration (excluding sensitive data)
-      log('debug', 'Email configuration', {
-        from: mailOptions.from,
-        to: mailOptions.to,
-        subject: mailOptions.subject,
-        has_content: !!mailOptions.text,
-        content_length: mailOptions.text.length
-      });
-
-      // Verify SMTP connection
-      try {
-        await transporter.verify();
-        log('info', 'SMTP connection verified successfully');
-      } catch (error) {
-        log('error', 'SMTP connection verification failed', {
-          error: error.message,
-          code: error.code
-        });
-        throw error;
-      }
-
-      const info = await transporter.sendMail(mailOptions);
+      const info = await sendEmail(call);
       
-      log('info', 'Email sent successfully', { 
-        to: defaultContact.email,
-        call_id,
-        message_id: info.messageId,
-        response: info.response,
-        accepted: info.accepted,
-        rejected: info.rejected
-      });
-
       return res.status(200).json({ 
         message: 'Email sent successfully',
         contact: {
-          name: defaultContact.name,
-          email: defaultContact.email
+          name: call.name,
+          email: call.email
         },
         call: {
           id: call_id,
@@ -419,7 +372,6 @@ This is an automated message from your Retell Voice Agent.
         error: error.message,
         error_code: error.code,
         error_command: error.command,
-        to: defaultContact.email,
         call_id,
         stack: error.stack
       });
