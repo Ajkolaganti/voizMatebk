@@ -47,6 +47,16 @@ const formatDuration = (ms) => {
   return `${minutes}m ${remainingSeconds}s`;
 };
 
+// Helper function to format cost
+const formatCost = (cost) => {
+  return `$${cost.toFixed(2)}`;
+};
+
+// Helper function to format timestamp
+const formatTimestamp = (timestamp) => {
+  return new Date(timestamp).toLocaleString();
+};
+
 export default async function handler(req, res) {
   // Handle GET requests with a helpful message
   if (req.method === 'GET') {
@@ -135,7 +145,11 @@ export default async function handler(req, res) {
       duration_ms,
       transcript,
       recording_url,
-      public_log_url
+      public_log_url,
+      start_timestamp,
+      end_timestamp,
+      disconnection_reason,
+      call_cost
     } = call;
 
     log('info', 'Processing call event', { 
@@ -145,7 +159,9 @@ export default async function handler(req, res) {
       duration_ms,
       has_transcript: !!transcript,
       has_recording: !!recording_url,
-      has_log: !!public_log_url
+      has_log: !!public_log_url,
+      disconnection_reason,
+      call_cost
     });
 
     // Read contacts from JSON file
@@ -179,38 +195,79 @@ export default async function handler(req, res) {
       });
     }
 
-    // Prepare email content
+    // Prepare email content with enhanced formatting
     const emailContent = `
-      Call Summary:
-      Call ID: ${call_id}
-      Type: ${call_type}
-      Status: ${call_status}
-      Duration: ${formatDuration(duration_ms)}
-      
-      ${transcript ? `Transcript:\n${transcript}\n` : ''}
-      
-      ${recording_url ? `Recording: ${recording_url}\n` : ''}
-      ${public_log_url ? `Call Log: ${public_log_url}\n` : ''}
-    `;
+📞 Call Summary
+==============
+
+📋 Call Details
+--------------
+Call ID: ${call_id}
+Type: ${call_type}
+Status: ${call_status}
+Duration: ${formatDuration(duration_ms)}
+Started: ${formatTimestamp(start_timestamp)}
+Ended: ${formatTimestamp(end_timestamp)}
+Disconnection Reason: ${disconnection_reason || 'Not specified'}
+
+💰 Cost Breakdown
+---------------
+${call_cost ? `
+Total Cost: ${formatCost(call_cost.combined_cost)}
+Duration Cost: ${formatCost(call_cost.total_duration_unit_price)}
+Product Costs:
+${call_cost.product_costs.map(cost => `- ${cost.product}: ${formatCost(cost.cost)}`).join('\n')}
+` : 'No cost information available'}
+
+${transcript ? `
+📝 Transcript
+-----------
+${transcript}
+` : ''}
+
+🔗 Links
+-------
+${recording_url ? `Recording: ${recording_url}` : ''}
+${public_log_url ? `Call Log: ${public_log_url}` : ''}
+
+---
+This is an automated message from your Retell Voice Agent.
+`;
 
     // Send email
     try {
       const mailOptions = {
         from: process.env.GMAIL_EMAIL,
         to: defaultContact.email,
-        subject: `Call Summary - ${call_id}`,
+        subject: `📞 Call Summary - ${call_id}`,
         text: emailContent,
       };
 
-      log('info', 'Sending email', { 
+      log('info', 'Preparing to send email', { 
         to: defaultContact.email,
-        subject: mailOptions.subject
+        subject: mailOptions.subject,
+        call_id,
+        content_length: emailContent.length
       });
 
-      await transporter.sendMail(mailOptions);
+      // Log email configuration (excluding sensitive data)
+      log('debug', 'Email configuration', {
+        from: mailOptions.from,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        has_content: !!mailOptions.text,
+        content_length: mailOptions.text.length
+      });
+
+      const info = await transporter.sendMail(mailOptions);
+      
       log('info', 'Email sent successfully', { 
         to: defaultContact.email,
-        call_id 
+        call_id,
+        message_id: info.messageId,
+        response: info.response,
+        accepted: info.accepted,
+        rejected: info.rejected
       });
 
       return res.status(200).json({ 
@@ -222,19 +279,39 @@ export default async function handler(req, res) {
         call: {
           id: call_id,
           duration: formatDuration(duration_ms),
-          status: call_status
+          status: call_status,
+          cost: call_cost ? formatCost(call_cost.combined_cost) : null
+        },
+        email: {
+          message_id: info.messageId,
+          accepted: info.accepted,
+          rejected: info.rejected
         }
       });
     } catch (error) {
       log('error', 'Failed to send email', { 
         error: error.message,
+        error_code: error.code,
+        error_command: error.command,
         to: defaultContact.email,
-        call_id
+        call_id,
+        stack: error.stack
       });
+
+      // Log additional error details if available
+      if (error.response) {
+        log('error', 'SMTP error response', {
+          code: error.responseCode,
+          command: error.command,
+          response: error.response
+        });
+      }
+
       return res.status(500).json({ 
         error: 'Failed to send email',
         message: 'Internal server error while sending email',
-        details: error.message
+        details: error.message,
+        code: error.code
       });
     }
   } catch (error) {
