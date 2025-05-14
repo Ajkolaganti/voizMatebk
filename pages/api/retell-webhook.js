@@ -40,9 +40,46 @@ const log = (level, message, data = {}) => {
 };
 
 export default async function handler(req, res) {
+  // Handle GET requests with a helpful message
+  if (req.method === 'GET') {
+    log('info', 'Received GET request', { 
+      path: req.url,
+      query: req.query,
+      headers: req.headers
+    });
+    
+    return res.status(200).json({
+      status: 'ok',
+      message: 'This is a webhook endpoint for Retell Voice Agent. Please use POST method to send call data.',
+      usage: {
+        method: 'POST',
+        endpoint: '/api/retell-webhook',
+        requiredFields: ['call_metadata'],
+        example: {
+          call_metadata: {
+            caller_number: '+1234567890',
+            agent_number: '+0987654321',
+            call_duration: 120,
+            call_status: 'completed',
+            call_id: 'unique-call-id'
+          }
+        }
+      }
+    });
+  }
+
+  // Only allow POST requests for actual webhook calls
   if (req.method !== 'POST') {
-    log('error', 'Method not allowed', { method: req.method });
-    return res.status(405).json({ error: 'Method not allowed' });
+    log('error', 'Method not allowed', { 
+      method: req.method,
+      allowedMethods: ['POST', 'GET'],
+      path: req.url
+    });
+    return res.status(405).json({ 
+      error: 'Method not allowed',
+      message: 'Only POST and GET methods are supported',
+      allowedMethods: ['POST', 'GET']
+    });
   }
 
   try {
@@ -53,11 +90,46 @@ export default async function handler(req, res) {
 
     const { call_metadata } = req.body;
     if (!call_metadata) {
-      log('error', 'Missing call_metadata in request');
-      return res.status(400).json({ error: 'Missing call_metadata' });
+      log('error', 'Missing call_metadata in request', {
+        body: req.body
+      });
+      return res.status(400).json({ 
+        error: 'Missing call_metadata',
+        message: 'The request body must include call_metadata object',
+        example: {
+          call_metadata: {
+            caller_number: '+1234567890',
+            agent_number: '+0987654321',
+            call_duration: 120,
+            call_status: 'completed',
+            call_id: 'unique-call-id'
+          }
+        }
+      });
     }
 
     const { caller_number, agent_number, call_duration, call_status, call_id } = call_metadata;
+    
+    // Validate required fields
+    const missingFields = [];
+    if (!caller_number) missingFields.push('caller_number');
+    if (!agent_number) missingFields.push('agent_number');
+    if (!call_duration) missingFields.push('call_duration');
+    if (!call_status) missingFields.push('call_status');
+    if (!call_id) missingFields.push('call_id');
+
+    if (missingFields.length > 0) {
+      log('error', 'Missing required fields in call_metadata', {
+        missingFields,
+        call_metadata
+      });
+      return res.status(400).json({
+        error: 'Missing required fields',
+        message: 'The following fields are required in call_metadata: ' + missingFields.join(', '),
+        missingFields
+      });
+    }
+
     log('info', 'Processing call metadata', { 
       caller_number,
       agent_number,
@@ -80,7 +152,10 @@ export default async function handler(req, res) {
         error: error.message,
         path: contactsPath
       });
-      return res.status(500).json({ error: 'Failed to read contacts file' });
+      return res.status(500).json({ 
+        error: 'Failed to read contacts file',
+        message: 'Internal server error while accessing contacts database'
+      });
     }
 
     // Find matching contact
@@ -89,7 +164,11 @@ export default async function handler(req, res) {
       log('warn', 'No matching contact found', { 
         caller_number 
       });
-      return res.status(404).json({ error: 'Contact not found' });
+      return res.status(404).json({ 
+        error: 'Contact not found',
+        message: `No contact found with phone number: ${caller_number}`,
+        caller_number
+      });
     }
 
     log('info', 'Found matching contact', { 
@@ -135,6 +214,11 @@ export default async function handler(req, res) {
         contact: {
           name: contact.name,
           email: contact.email
+        },
+        call: {
+          id: call_id,
+          duration: call_duration,
+          status: call_status
         }
       });
     } catch (error) {
@@ -143,13 +227,21 @@ export default async function handler(req, res) {
         to: contact.email,
         call_id
       });
-      return res.status(500).json({ error: 'Failed to send email' });
+      return res.status(500).json({ 
+        error: 'Failed to send email',
+        message: 'Internal server error while sending email',
+        details: error.message
+      });
     }
   } catch (error) {
     log('error', 'Unexpected error in webhook handler', { 
       error: error.message,
       stack: error.stack
     });
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      message: 'An unexpected error occurred while processing the webhook',
+      details: error.message
+    });
   }
 } 
