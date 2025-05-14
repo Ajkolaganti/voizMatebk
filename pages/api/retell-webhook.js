@@ -217,20 +217,20 @@ This is an automated message from your Retell Voice Agent.
 `;
 }
 
-// Replace the email sending section with this updated version
+// Update the sendEmail function to use consistent logging
 async function sendEmail(call) {
   try {
     // Read contacts
     const contactsPath = path.join(process.cwd(), 'data', 'contacts.json');
-    console.log('Reading contacts from:', contactsPath);
+    log('info', 'Reading contacts from:', { path: contactsPath });
     
     let contacts = [];
     try {
       const contactsData = await fs.readFile(contactsPath, 'utf8');
       contacts = JSON.parse(contactsData);
-      console.log('Successfully loaded contacts:', { count: contacts.length });
+      log('info', 'Successfully loaded contacts:', { count: contacts.length });
     } catch (error) {
-      console.error('Error reading contacts:', error);
+      log('error', 'Error reading contacts:', { error: error.message });
       // Continue with default email if contacts file can't be read
     }
 
@@ -242,12 +242,12 @@ async function sendEmail(call) {
       const contact = contacts.find(c => c.number === callerNumber);
       if (contact && contact.email) {
         recipientEmail = contact.email;
-        console.log('Found contact email:', { name: contact.name, email: contact.email });
+        log('info', 'Found contact email:', { name: contact.name, email: contact.email });
       } else {
-        console.log('No email found for contact, using default:', { number: callerNumber });
+        log('info', 'No email found for contact, using default:', { number: callerNumber });
       }
     } else {
-      console.log('Using default email recipient:', DEFAULT_EMAIL);
+      log('info', 'Using default email recipient:', { email: DEFAULT_EMAIL });
     }
 
     // Validate email address
@@ -257,7 +257,7 @@ async function sendEmail(call) {
 
     // Prepare email content
     const emailContent = formatEmailContent(call);
-    console.log('Prepared email content:', { length: emailContent.length });
+    log('info', 'Prepared email content:', { length: emailContent.length });
 
     // Create transporter
     const transporter = createTransporter();
@@ -271,10 +271,10 @@ async function sendEmail(call) {
       to: recipientEmail,
       subject: `Call Summary - ${call.call_id}`,
       text: emailContent,
-      html: emailContent
+      html: formatEmailContentHtml(call) // Use HTML version for better formatting
     });
 
-    console.log('Email sent successfully:', {
+    log('info', 'Email sent successfully:', {
       messageId: info.messageId,
       recipient: recipientEmail,
       callId: call.call_id
@@ -282,7 +282,7 @@ async function sendEmail(call) {
 
     return info;
   } catch (error) {
-    console.error('Failed to send email:', {
+    log('error', 'Failed to send email:', {
       error: error.message,
       error_code: error.code,
       error_command: error.command,
@@ -291,6 +291,79 @@ async function sendEmail(call) {
     });
     throw error;
   }
+}
+
+// Add HTML email formatting function
+function formatEmailContentHtml(call) {
+  const {
+    call_id,
+    call_type,
+    call_status,
+    duration_ms,
+    transcript,
+    recording_url,
+    public_log_url,
+    start_timestamp,
+    end_timestamp,
+    disconnection_reason,
+    call_cost,
+    call_analysis
+  } = call;
+
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h1 style="color: #2c3e50;">📞 Call Summary</h1>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📋 Call Details</h2>
+        <p><strong>Call ID:</strong> ${call_id}</p>
+        <p><strong>Type:</strong> ${call_type}</p>
+        <p><strong>Status:</strong> ${call_status}</p>
+        <p><strong>Duration:</strong> ${formatDuration(duration_ms)}</p>
+        <p><strong>Started:</strong> ${formatTimestamp(start_timestamp)}</p>
+        <p><strong>Ended:</strong> ${formatTimestamp(end_timestamp)}</p>
+        <p><strong>Disconnection Reason:</strong> ${disconnection_reason || 'Not specified'}</p>
+      </div>
+
+      ${call_analysis ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📊 Call Analysis</h2>
+        <p><strong>Summary:</strong> ${call_analysis.call_summary}</p>
+        <p><strong>User Sentiment:</strong> ${call_analysis.user_sentiment}</p>
+        <p><strong>Call Successful:</strong> ${call_analysis.call_successful ? 'Yes' : 'No'}</p>
+        ${call_analysis.in_voicemail ? '<p><strong>📱 Left Voicemail</strong></p>' : ''}
+      </div>
+      ` : ''}
+
+      ${call_cost ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">💰 Cost Breakdown</h2>
+        <p><strong>Total Cost:</strong> ${formatCost(call_cost.combined_cost)}</p>
+        <p><strong>Duration Cost:</strong> ${formatCost(call_cost.total_duration_unit_price)}</p>
+        <h3>Product Costs:</h3>
+        <ul>
+          ${call_cost.product_costs.map(cost => `<li>${cost.product}: ${formatCost(cost.cost)}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
+
+      ${transcript ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📝 Transcript</h2>
+        <pre style="white-space: pre-wrap;">${transcript}</pre>
+      </div>
+      ` : ''}
+
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+        <h2 style="color: #34495e;">🔗 Links</h2>
+        ${recording_url ? `<p><a href="${recording_url}">Recording</a></p>` : ''}
+        ${public_log_url ? `<p><a href="${public_log_url}">Call Log</a></p>` : ''}
+      </div>
+
+      <hr style="margin: 20px 0;">
+      <p style="color: #7f8c8d; font-size: 12px;">This is an automated message from your Retell Voice Agent.</p>
+    </div>
+  `;
 }
 
 export default async function handler(req, res) {
