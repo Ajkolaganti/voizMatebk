@@ -372,14 +372,28 @@ function formatEmailContentHtml(call) {
   `;
 }
 
+// Add CORS headers
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, PUT, PATCH, DELETE',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Accept, Origin',
+  'Access-Control-Allow-Credentials': 'true',
+  'Access-Control-Max-Age': '86400'
+};
+
 export default async function handler(req, res) {
-  // Redirect to the new webhook endpoint
+  // Handle OPTIONS request for CORS preflight
   if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      res.setHeader(key, value);
+    });
     return res.status(200).end();
   }
+
+  // Add CORS headers to all responses
+  Object.entries(corsHeaders).forEach(([key, value]) => {
+    res.setHeader(key, value);
+  });
 
   // Log the redirect
   console.log(JSON.stringify({
@@ -388,7 +402,8 @@ export default async function handler(req, res) {
     message: 'Redirecting to new webhook endpoint',
     old_path: '/api/retell-webhook',
     new_path: '/api/vapi-webhook',
-    method: req.method
+    method: req.method,
+    headers: req.headers
   }));
 
   // Redirect the request to the new endpoint
