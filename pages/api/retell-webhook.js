@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
-import fs from 'fs';
+import { promises as fs } from 'fs';
 import path from 'path';
 
 // Initialize Gmail API
