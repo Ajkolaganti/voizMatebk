@@ -39,6 +39,14 @@ const log = (level, message, data = {}) => {
   console.log(JSON.stringify(logEntry));
 };
 
+// Helper function to format duration
+const formatDuration = (ms) => {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+};
+
 export default async function handler(req, res) {
   // Handle GET requests with a helpful message
   if (req.method === 'GET') {
@@ -54,14 +62,15 @@ export default async function handler(req, res) {
       usage: {
         method: 'POST',
         endpoint: '/api/retell-webhook',
-        requiredFields: ['call_metadata'],
+        requiredFields: ['event', 'call'],
         example: {
-          call_metadata: {
-            caller_number: '+1234567890',
-            agent_number: '+0987654321',
-            call_duration: 120,
-            call_status: 'completed',
-            call_id: 'unique-call-id'
+          event: 'call_ended',
+          call: {
+            call_id: 'unique-call-id',
+            call_type: 'web_call',
+            call_status: 'ended',
+            duration_ms: 30000,
+            transcript: 'Call transcript here...'
           }
         }
       }
@@ -88,54 +97,55 @@ export default async function handler(req, res) {
       headers: req.headers
     });
 
-    const { call_metadata } = req.body;
-    if (!call_metadata) {
-      log('error', 'Missing call_metadata in request', {
+    const { event, call } = req.body;
+    
+    // Validate required fields
+    if (!event || !call) {
+      log('error', 'Missing required fields', {
         body: req.body
       });
       return res.status(400).json({ 
-        error: 'Missing call_metadata',
-        message: 'The request body must include call_metadata object',
+        error: 'Missing required fields',
+        message: 'The request body must include event and call objects',
         example: {
-          call_metadata: {
-            caller_number: '+1234567890',
-            agent_number: '+0987654321',
-            call_duration: 120,
-            call_status: 'completed',
-            call_id: 'unique-call-id'
+          event: 'call_ended',
+          call: {
+            call_id: 'unique-call-id',
+            call_type: 'web_call',
+            call_status: 'ended',
+            duration_ms: 30000
           }
         }
       });
     }
 
-    const { caller_number, agent_number, call_duration, call_status, call_id } = call_metadata;
-    
-    // Validate required fields
-    const missingFields = [];
-    if (!caller_number) missingFields.push('caller_number');
-    if (!agent_number) missingFields.push('agent_number');
-    if (!call_duration) missingFields.push('call_duration');
-    if (!call_status) missingFields.push('call_status');
-    if (!call_id) missingFields.push('call_id');
-
-    if (missingFields.length > 0) {
-      log('error', 'Missing required fields in call_metadata', {
-        missingFields,
-        call_metadata
-      });
-      return res.status(400).json({
-        error: 'Missing required fields',
-        message: 'The following fields are required in call_metadata: ' + missingFields.join(', '),
-        missingFields
+    // Only process call_ended events
+    if (event !== 'call_ended') {
+      log('info', 'Ignoring non-call_ended event', { event });
+      return res.status(200).json({ 
+        message: 'Event received but not processed',
+        event
       });
     }
 
-    log('info', 'Processing call metadata', { 
-      caller_number,
-      agent_number,
-      call_duration,
+    const {
+      call_id,
+      call_type,
       call_status,
-      call_id
+      duration_ms,
+      transcript,
+      recording_url,
+      public_log_url
+    } = call;
+
+    log('info', 'Processing call event', { 
+      call_id,
+      call_type,
+      call_status,
+      duration_ms,
+      has_transcript: !!transcript,
+      has_recording: !!recording_url,
+      has_log: !!public_log_url
     });
 
     // Read contacts from JSON file
@@ -158,73 +168,67 @@ export default async function handler(req, res) {
       });
     }
 
-    // Find matching contact
-    const contact = contacts.find(c => c.phone === caller_number);
-    if (!contact) {
-      log('warn', 'No matching contact found', { 
-        caller_number 
-      });
-      return res.status(404).json({ 
-        error: 'Contact not found',
-        message: `No contact found with phone number: ${caller_number}`,
-        caller_number
+    // For now, we'll send the email to a default contact since we don't have caller number
+    // In a real implementation, you would need to map the call to a contact
+    const defaultContact = contacts[0]; // Using first contact as default
+    if (!defaultContact) {
+      log('error', 'No contacts found in database');
+      return res.status(500).json({ 
+        error: 'No contacts configured',
+        message: 'Please add at least one contact to the database'
       });
     }
-
-    log('info', 'Found matching contact', { 
-      contact: {
-        name: contact.name,
-        phone: contact.phone,
-        email: contact.email
-      }
-    });
 
     // Prepare email content
     const emailContent = `
       Call Summary:
-      Caller: ${contact.name} (${caller_number})
-      Agent: ${agent_number}
-      Duration: ${call_duration} seconds
-      Status: ${call_status}
       Call ID: ${call_id}
+      Type: ${call_type}
+      Status: ${call_status}
+      Duration: ${formatDuration(duration_ms)}
+      
+      ${transcript ? `Transcript:\n${transcript}\n` : ''}
+      
+      ${recording_url ? `Recording: ${recording_url}\n` : ''}
+      ${public_log_url ? `Call Log: ${public_log_url}\n` : ''}
     `;
 
     // Send email
     try {
       const mailOptions = {
         from: process.env.GMAIL_EMAIL,
-        to: contact.email,
+        to: defaultContact.email,
         subject: `Call Summary - ${call_id}`,
         text: emailContent,
       };
 
       log('info', 'Sending email', { 
-        to: contact.email,
+        to: defaultContact.email,
         subject: mailOptions.subject
       });
 
       await transporter.sendMail(mailOptions);
       log('info', 'Email sent successfully', { 
-        to: contact.email,
+        to: defaultContact.email,
         call_id 
       });
 
       return res.status(200).json({ 
         message: 'Email sent successfully',
         contact: {
-          name: contact.name,
-          email: contact.email
+          name: defaultContact.name,
+          email: defaultContact.email
         },
         call: {
           id: call_id,
-          duration: call_duration,
+          duration: formatDuration(duration_ms),
           status: call_status
         }
       });
     } catch (error) {
       log('error', 'Failed to send email', { 
         error: error.message,
-        to: contact.email,
+        to: defaultContact.email,
         call_id
       });
       return res.status(500).json({ 
