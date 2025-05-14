@@ -1,0 +1,23 @@
+{
+  "name": "webhook",
+  "version": "1.0.0",
+  "description": "Retell webhook handler with Gmail integration",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "googleapis": "latest",
+    "dotenv": "latest",
+    "nodemailer": "latest"
+  }
+}
