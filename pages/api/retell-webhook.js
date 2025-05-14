@@ -152,6 +152,71 @@ const createTransporter = () => {
   });
 };
 
+// Add this after the helper functions and before sendEmail
+function formatEmailContent(call) {
+  const {
+    call_id,
+    call_type,
+    call_status,
+    duration_ms,
+    transcript,
+    recording_url,
+    public_log_url,
+    start_timestamp,
+    end_timestamp,
+    disconnection_reason,
+    call_cost,
+    call_analysis
+  } = call;
+
+  return `
+📞 Call Summary
+==============
+
+📋 Call Details
+--------------
+Call ID: ${call_id}
+Type: ${call_type}
+Status: ${call_status}
+Duration: ${formatDuration(duration_ms)}
+Started: ${formatTimestamp(start_timestamp)}
+Ended: ${formatTimestamp(end_timestamp)}
+Disconnection Reason: ${disconnection_reason || 'Not specified'}
+
+${call_analysis ? `
+📊 Call Analysis
+--------------
+Summary: ${call_analysis.call_summary}
+User Sentiment: ${call_analysis.user_sentiment}
+Call Successful: ${call_analysis.call_successful ? 'Yes' : 'No'}
+${call_analysis.in_voicemail ? '📱 Left Voicemail' : ''}
+` : ''}
+
+💰 Cost Breakdown
+---------------
+${call_cost ? `
+Total Cost: ${formatCost(call_cost.combined_cost)}
+Duration Cost: ${formatCost(call_cost.total_duration_unit_price)}
+Product Costs:
+${call_cost.product_costs.map(cost => `- ${cost.product}: ${formatCost(cost.cost)}`).join('\n')}
+` : 'No cost information available'}
+
+${transcript ? `
+📝 Transcript
+-----------
+${transcript}
+` : ''}
+
+🔗 Links
+-------
+${recording_url ? `Recording: ${recording_url}` : ''}
+${public_log_url ? `Call Log: ${public_log_url}` : ''}
+
+---
+This is an automated message from your Retell Voice Agent.
+`;
+}
+
 // Replace the email sending section with this updated version
 async function sendEmail(call) {
   try {
