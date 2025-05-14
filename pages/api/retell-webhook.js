@@ -1,90 +1,155 @@
-import { sendEmail } from '../../utils/gmail';
-import contacts from '../../data/contacts.json';
-import path from 'path';
+import { google } from 'googleapis';
+import nodemailer from 'nodemailer';
 import fs from 'fs';
+import path from 'path';
 
-// Helper function to clean phone numbers
-function cleanPhoneNumber(phone) {
-  return phone.replace(/\D/g, '');
-}
+// Initialize Gmail API
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET
+);
 
-// Helper function to find contact by phone number
-function findContactByPhone(phone) {
-  const cleanedPhone = cleanPhoneNumber(phone);
-  return contacts.find(contact => 
-    cleanPhoneNumber(contact.number) === cleanedPhone
-  );
-}
+oauth2Client.setCredentials({
+  refresh_token: process.env.GMAIL_REFRESH_TOKEN
+});
 
-// Helper function to generate voice prompt
-function generateVoicePrompt(contact) {
-  if (contact) {
-    return `Hey, this is Ajay! Oh hey ${contact.name}, Ajay's busy right now, but I'll let him know you called.`;
-  }
-  return "Hey! This is Ajay. Can I know who's calling and what this is regarding?";
-}
+const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-// Helper function to format duration
-function formatDuration(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
-}
+// Create email transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    type: 'OAuth2',
+    user: process.env.GMAIL_EMAIL,
+    clientId: process.env.GMAIL_CLIENT_ID,
+    clientSecret: process.env.GMAIL_CLIENT_SECRET,
+    refreshToken: process.env.GMAIL_REFRESH_TOKEN,
+  },
+});
+
+// Helper function to log with timestamp
+const log = (level, message, data = {}) => {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    level,
+    message,
+    ...data
+  };
+  console.log(JSON.stringify(logEntry));
+};
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
+    log('error', 'Method not allowed', { method: req.method });
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const {
+    log('info', 'Received webhook request', { 
+      body: req.body,
+      headers: req.headers
+    });
+
+    const { call_metadata } = req.body;
+    if (!call_metadata) {
+      log('error', 'Missing call_metadata in request');
+      return res.status(400).json({ error: 'Missing call_metadata' });
+    }
+
+    const { caller_number, agent_number, call_duration, call_status, call_id } = call_metadata;
+    log('info', 'Processing call metadata', { 
       caller_number,
-      transcript,
-      duration,
-      transcript_summary
-    } = req.body;
+      agent_number,
+      call_duration,
+      call_status,
+      call_id
+    });
 
-    // Find contact if exists
-    const contact = findContactByPhone(caller_number);
-    
-    // Generate voice prompt
-    const voicePrompt = generateVoicePrompt(contact);
+    // Read contacts from JSON file
+    const contactsPath = path.join(process.cwd(), 'data', 'contacts.json');
+    let contacts;
+    try {
+      const contactsData = fs.readFileSync(contactsPath, 'utf8');
+      contacts = JSON.parse(contactsData);
+      log('info', 'Successfully loaded contacts', { 
+        contactCount: contacts.length 
+      });
+    } catch (error) {
+      log('error', 'Failed to read contacts file', { 
+        error: error.message,
+        path: contactsPath
+      });
+      return res.status(500).json({ error: 'Failed to read contacts file' });
+    }
 
-    // Prepare email content with modern formatting
-    const emailSubject = `📞 New Call ${contact ? `from ${contact.name}` : 'from Unknown Number'}`;
-    const emailText = `
-🚀 *Incoming Call Alert* 🚀
+    // Find matching contact
+    const contact = contacts.find(c => c.phone === caller_number);
+    if (!contact) {
+      log('warn', 'No matching contact found', { 
+        caller_number 
+      });
+      return res.status(404).json({ error: 'Contact not found' });
+    }
 
-📱 *Call Details*
-----------------
-👤 Contact: ${contact ? contact.name : 'Unknown'}
-📞 Number: ${caller_number}
-⏱️ Duration: ${formatDuration(duration)}
+    log('info', 'Found matching contact', { 
+      contact: {
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email
+      }
+    });
 
-${transcript_summary ? `📝 *Call Summary*\n${transcript_summary}\n` : ''}
-
-📜 *Full Transcript*
-------------------
-${transcript || 'No transcript available'}
-
----
-🤖 *This is an automated message from your AI Assistant*
+    // Prepare email content
+    const emailContent = `
+      Call Summary:
+      Caller: ${contact.name} (${caller_number})
+      Agent: ${agent_number}
+      Duration: ${call_duration} seconds
+      Status: ${call_status}
+      Call ID: ${call_id}
     `;
 
     // Send email
-    await sendEmail(emailSubject, emailText);
+    try {
+      const mailOptions = {
+        from: process.env.GMAIL_EMAIL,
+        to: contact.email,
+        subject: `Call Summary - ${call_id}`,
+        text: emailContent,
+      };
 
-    // Return success response
-    return res.status(200).json({
-      success: true,
-      voice_prompt: voicePrompt
-    });
+      log('info', 'Sending email', { 
+        to: contact.email,
+        subject: mailOptions.subject
+      });
 
+      await transporter.sendMail(mailOptions);
+      log('info', 'Email sent successfully', { 
+        to: contact.email,
+        call_id 
+      });
+
+      return res.status(200).json({ 
+        message: 'Email sent successfully',
+        contact: {
+          name: contact.name,
+          email: contact.email
+        }
+      });
+    } catch (error) {
+      log('error', 'Failed to send email', { 
+        error: error.message,
+        to: contact.email,
+        call_id
+      });
+      return res.status(500).json({ error: 'Failed to send email' });
+    }
   } catch (error) {
-    console.error('Error processing webhook:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error'
+    log('error', 'Unexpected error in webhook handler', { 
+      error: error.message,
+      stack: error.stack
     });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 } 
