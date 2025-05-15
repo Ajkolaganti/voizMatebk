@@ -12,6 +12,10 @@ const corsHeaders = {
   'Access-Control-Max-Age': '86400'
 };
 
+// Add Vapi API configuration
+const VAPI_API_KEY = process.env.VAPI_API_KEY;
+const VAPI_API_URL = 'https://api.vapi.ai/api';
+
 // Initialize Gmail API
 const oauth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
@@ -161,139 +165,46 @@ const createTransporter = () => {
   });
 };
 
-// Format email content
-function formatEmailContent(call) {
-  const {
-    id,
-    status,
-    startTime,
-    endTime,
-    duration,
-    from,
-    to,
-    error,
-    transcript,
-    recordingUrl,
-    summary,
-    cost
-  } = call;
+// Add function to fetch call details from Vapi
+async function fetchCallDetails(callId) {
+  try {
+    log('info', 'Fetching call details from Vapi', { callId });
+    
+    const response = await fetch(`${VAPI_API_URL}/logs`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${VAPI_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
 
-  return `
-📞 Call Summary
-==============
+    if (!response.ok) {
+      throw new Error(`Vapi API error: ${response.status} ${response.statusText}`);
+    }
 
-📋 Call Details
---------------
-From: ${process.env.GMAIL_EMAIL}
-Caller: ${from || 'Unknown'}
-Recipient: ${to || 'Unknown'}
-Call ID: ${id}
-Status: ${status}
-Duration: ${formatDuration(duration)}
-Started: ${formatTimestamp(startTime)}
-Ended: ${formatTimestamp(endTime)}
-${error ? `Error: ${error}` : ''}
+    const data = await response.json();
+    log('info', 'Received call details from Vapi', { 
+      callId,
+      hasData: !!data,
+      dataLength: JSON.stringify(data).length
+    });
 
-${summary ? `
-📊 Call Summary
---------------
-${summary}
-` : ''}
-
-${cost ? `
-💰 Cost
--------
-Total Cost: ${formatCost(cost)}
-` : ''}
-
-${transcript ? `
-📝 Transcript
------------
-${transcript}
-` : ''}
-
-${recordingUrl ? `
-🔗 Recording
-----------
-${recordingUrl}
-` : ''}
-
----
-This is an automated message from your Vapi AI Assistant.
-`;
+    return data;
+  } catch (error) {
+    log('error', 'Failed to fetch call details from Vapi', {
+      error: error.message,
+      callId
+    });
+    throw error;
+  }
 }
 
-// Format HTML email content
-function formatEmailContentHtml(call) {
-  const {
-    id,
-    status,
-    startTime,
-    endTime,
-    duration,
-    from,
-    to,
-    error,
-    transcript,
-    recordingUrl,
-    summary,
-    cost
-  } = call;
-
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h1 style="color: #2c3e50;">📞 Call Summary</h1>
-      
-      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-        <h2 style="color: #34495e;">📋 Call Details</h2>
-        <p><strong>From:</strong> ${process.env.GMAIL_EMAIL}</p>
-        <p><strong>Caller:</strong> ${from || 'Unknown'}</p>
-        <p><strong>Recipient:</strong> ${to || 'Unknown'}</p>
-        <p><strong>Call ID:</strong> ${id}</p>
-        <p><strong>Status:</strong> ${status}</p>
-        <p><strong>Duration:</strong> ${formatDuration(duration)}</p>
-        <p><strong>Started:</strong> ${formatTimestamp(startTime)}</p>
-        <p><strong>Ended:</strong> ${formatTimestamp(endTime)}</p>
-        ${error ? `<p><strong>Error:</strong> ${error}</p>` : ''}
-      </div>
-
-      ${summary ? `
-      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-        <h2 style="color: #34495e;">📊 Call Summary</h2>
-        <p>${summary}</p>
-      </div>
-      ` : ''}
-
-      ${cost ? `
-      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-        <h2 style="color: #34495e;">💰 Cost</h2>
-        <p><strong>Total Cost:</strong> ${formatCost(cost)}</p>
-      </div>
-      ` : ''}
-
-      ${transcript ? `
-      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-        <h2 style="color: #34495e;">📝 Transcript</h2>
-        <pre style="white-space: pre-wrap;">${transcript}</pre>
-      </div>
-      ` : ''}
-
-      ${recordingUrl ? `
-      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
-        <h2 style="color: #34495e;">🔗 Recording</h2>
-        <p><a href="${recordingUrl}">Listen to Recording</a></p>
-      </div>
-      ` : ''}
-
-      <hr style="margin: 20px 0;">
-      <p style="color: #7f8c8d; font-size: 12px;">This is an automated message from your Vapi AI Assistant.</p>
-    </div>
-  `;
-}
-
-// Send email
+// Update sendEmail function to use Vapi data
 async function sendEmail(call) {
   try {
+    // Fetch call details from Vapi
+    const callDetails = await fetchCallDetails(call.id);
+    
     // Read contacts
     const contactsPath = path.join(process.cwd(), 'data', 'contacts.json');
     log('info', 'Reading contacts from:', { path: contactsPath });
@@ -329,8 +240,11 @@ async function sendEmail(call) {
       throw new Error('Invalid recipient email address');
     }
 
-    // Prepare email content
-    const emailContent = formatEmailContent(call);
+    // Prepare email content with Vapi data
+    const emailContent = formatEmailContent({
+      ...call,
+      ...callDetails
+    });
     log('info', 'Prepared email content:', { length: emailContent.length });
 
     // Create transporter
@@ -345,7 +259,10 @@ async function sendEmail(call) {
       to: recipientEmail,
       subject: `Call Summary - ${call.id}`,
       text: emailContent,
-      html: formatEmailContentHtml(call)
+      html: formatEmailContentHtml({
+        ...call,
+        ...callDetails
+      })
     });
 
     log('info', 'Email sent successfully:', {
@@ -365,6 +282,168 @@ async function sendEmail(call) {
     });
     throw error;
   }
+}
+
+// Update formatEmailContent to include Vapi data
+function formatEmailContent(call) {
+  const {
+    id,
+    status,
+    startTime,
+    endTime,
+    duration,
+    from,
+    to,
+    error,
+    transcript,
+    recordingUrl,
+    summary,
+    cost,
+    logs,
+    metadata
+  } = call;
+
+  return `
+📞 Call Summary
+==============
+
+📋 Call Details
+--------------
+From: ${process.env.GMAIL_EMAIL}
+Caller: ${from || 'Unknown'}
+Recipient: ${to || 'Unknown'}
+Call ID: ${id}
+Status: ${status}
+Duration: ${formatDuration(duration)}
+Started: ${formatTimestamp(startTime)}
+Ended: ${formatTimestamp(endTime)}
+${error ? `Error: ${error}` : ''}
+
+${summary ? `
+📊 Call Summary
+--------------
+${summary}
+` : ''}
+
+${logs ? `
+📝 Call Logs
+-----------
+${logs.map(log => `[${formatTimestamp(log.timestamp)}] ${log.message}`).join('\n')}
+` : ''}
+
+${metadata ? `
+📋 Additional Information
+-----------------------
+${Object.entries(metadata).map(([key, value]) => `${key}: ${value}`).join('\n')}
+` : ''}
+
+${cost ? `
+💰 Cost
+-------
+Total Cost: ${formatCost(cost)}
+` : ''}
+
+${transcript ? `
+📝 Transcript
+-----------
+${transcript}
+` : ''}
+
+${recordingUrl ? `
+🔗 Recording
+----------
+${recordingUrl}
+` : ''}
+
+---
+This is an automated message from your Vapi AI Assistant.
+`;
+}
+
+// Update formatEmailContentHtml to include Vapi data
+function formatEmailContentHtml(call) {
+  const {
+    id,
+    status,
+    startTime,
+    endTime,
+    duration,
+    from,
+    to,
+    error,
+    transcript,
+    recordingUrl,
+    summary,
+    cost,
+    logs,
+    metadata
+  } = call;
+
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h1 style="color: #2c3e50;">📞 Call Summary</h1>
+      
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📋 Call Details</h2>
+        <p><strong>From:</strong> ${process.env.GMAIL_EMAIL}</p>
+        <p><strong>Caller:</strong> ${from || 'Unknown'}</p>
+        <p><strong>Recipient:</strong> ${to || 'Unknown'}</p>
+        <p><strong>Call ID:</strong> ${id}</p>
+        <p><strong>Status:</strong> ${status}</p>
+        <p><strong>Duration:</strong> ${formatDuration(duration)}</p>
+        <p><strong>Started:</strong> ${formatTimestamp(startTime)}</p>
+        <p><strong>Ended:</strong> ${formatTimestamp(endTime)}</p>
+        ${error ? `<p><strong>Error:</strong> ${error}</p>` : ''}
+      </div>
+
+      ${summary ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📊 Call Summary</h2>
+        <p>${summary}</p>
+      </div>
+      ` : ''}
+
+      ${logs ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📝 Call Logs</h2>
+        <pre style="white-space: pre-wrap;">${logs.map(log => `[${formatTimestamp(log.timestamp)}] ${log.message}`).join('\n')}</pre>
+      </div>
+      ` : ''}
+
+      ${metadata ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📋 Additional Information</h2>
+        <ul>
+          ${Object.entries(metadata).map(([key, value]) => `<li><strong>${key}:</strong> ${value}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
+
+      ${cost ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">💰 Cost</h2>
+        <p><strong>Total Cost:</strong> ${formatCost(cost)}</p>
+      </div>
+      ` : ''}
+
+      ${transcript ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2 style="color: #34495e;">📝 Transcript</h2>
+        <pre style="white-space: pre-wrap;">${transcript}</pre>
+      </div>
+      ` : ''}
+
+      ${recordingUrl ? `
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+        <h2 style="color: #34495e;">🔗 Recording</h2>
+        <p><a href="${recordingUrl}">Listen to Recording</a></p>
+      </div>
+      ` : ''}
+
+      <hr style="margin: 20px 0;">
+      <p style="color: #7f8c8d; font-size: 12px;">This is an automated message from your Vapi AI Assistant.</p>
+    </div>
+  `;
 }
 
 export default async function handler(req, res) {
